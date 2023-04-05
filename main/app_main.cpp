@@ -4,6 +4,7 @@
 #include <esp_matter.h>
 
 #include "ds18b20.h"
+#include "button.h"
 
 using namespace esp_matter;
 using namespace esp_matter::attribute;
@@ -15,6 +16,36 @@ using namespace chip::app::Clusters;
 static const char *TAG = "app_main";
 
 uint16_t endpoint_id;
+int64_t last_button_press;
+TaskHandle_t reset_task_handle;
+
+void reset_task(void *args) {
+    ESP_LOGI("reset_task", "Button pressed");
+
+    for (uint8_t i = 0; i < 5; i++) {
+        if (!button::is_pressed()) {
+            vTaskDelete(reset_task_handle);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        last_button_press = esp_timer_get_time();
+    }
+
+    ESP_LOGI("reset_task", "Reset requested");
+    esp_matter::factory_reset();
+    vTaskDelete(reset_task_handle);
+}
+
+void button_task(void *args) {
+    int64_t time = esp_timer_get_time();
+
+    if (time - last_button_press < 1000000) {
+        return;
+    }
+
+    xTaskCreate(reset_task, "reset_task", 4096, NULL, 0, &reset_task_handle);
+    last_button_press = time;
+}
 
 void temperature_task(void *args) {
     while (true) {
@@ -40,6 +71,7 @@ extern "C" void app_main()
 {
     nvs_flash_init();
     ds18b20::init();
+    button::init(&button_task);
 
     node::config_t node_config;
     node_t *node = node::create(&node_config, NULL, NULL);
